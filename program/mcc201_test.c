@@ -82,7 +82,7 @@ static void getBroadcastAttitudeFromUart(void)
     option.c_oflag = 0;
     option.c_lflag = 0;
     option.c_cc[VTIME] = 0;
-    option.c_cc[VMIN] = ATTI_FRAME_SIZE+2;
+    option.c_cc[VMIN] = ATTI_FRAME_SIZE*2+3;
     tcsetattr(fd, TCSANOW, &option);
 #endif
     system("stty -F /dev/ttyUSB2 38400 \n");
