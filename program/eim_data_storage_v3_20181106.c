@@ -76,6 +76,12 @@
 #define ATTI_FRAME_PH       (9)
 #define ATTI_FRAME_RL       (10)
 #define ATTI_FRAME_RH       (11)
+#define ATTI_BOUND_X_HIGH   ((unsigned short)(6400*ATTI_VALUE_MULTIPLY))
+#define ATTI_BOUND_X_LOW    ((unsigned short)(0*ATTI_VALUE_MULTIPLY))
+#define ATTI_BOUND_Y_HIGH   ((short)((90.0/360)*6400*ATTI_VALUE_MULTIPLY))
+#define ATTI_BOUND_Y_LOW    ((short)((-90.0/360)*6400*ATTI_VALUE_MULTIPLY))
+#define ATTI_BOUND_Z_HIGH   ((short)((90.0/360)*6400*ATTI_VALUE_MULTIPLY))
+#define ATTI_BOUND_Z_LOW    ((short)((-90.0/360)*6400*ATTI_VALUE_MULTIPLY))
 
 #define PERIODIC_FUNC_PERIOD_USEC   (200000)    /* set period to 200 ms */
 /*****************************************************************************/
@@ -612,13 +618,13 @@ static void writeDeepthToSpi(struct UpdateInfo *reg)
  */
 static void writeAttitudeToSpi(struct UpdateInfo *reg)
 {
-    if (reg->angle_x) {
+    if (reg->angle_x>=ATTI_BOUND_X_LOW&&reg->angle_x<=ATTI_BOUND_X_HIGH) {
         writeDataToSpi(0x86000000 | (reg->angle_x & 0x0000ffff));
     }
-    if (reg->angle_y) {
+    if (reg->angle_y>=ATTI_BOUND_Y_LOW&&reg->angle_y<=ATTI_BOUND_Y_HIGH) {
         writeDataToSpi(0x87000000 | (reg->angle_y & 0x0000ffff));
     }
-    if (reg->angle_z) {
+    if (reg->angle_z>=ATTI_BOUND_Z_LOW&&reg->angle_z<=ATTI_BOUND_Z_HIGH) {
         writeDataToSpi(0x88000000 | (reg->angle_z & 0x0000ffff));
     }
     TRACE("SPI VALUE: 0x%08X, 0x%08X, 0x%08X\n", 
