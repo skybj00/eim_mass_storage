@@ -12,7 +12,7 @@
 
 #define TRACE(fmt,args...) printf(fmt, ##args)
 
-#define UART_1_FILE     "/dev/ttyUSB2"
+#define UART_1_FILE     "/dev/ttyUSB0"
 #define ATTI_FRAME_HEADER_LEN     (4)
 #define ATTI_FRAME_SIZE     (12)
 #define ATTI_BUF_SIZE       (ATTI_FRAME_SIZE*4)
