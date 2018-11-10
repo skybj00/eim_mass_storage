@@ -85,7 +85,7 @@ static void getBroadcastAttitudeFromUart(void)
     option.c_cc[VMIN] = ATTI_FRAME_SIZE*2+3;
     tcsetattr(fd, TCSANOW, &option);
 #endif
-    system("stty -F /dev/ttyUSB2 38400 \n");
+    system("stty -F /dev/ttyUSB0 38400 \n");
     /* read response from device */
     memset(responseBuf, 0, sizeof(responseBuf));
     l_read_cnt = read(fd, responseBuf, ATTI_BUF_SIZE);

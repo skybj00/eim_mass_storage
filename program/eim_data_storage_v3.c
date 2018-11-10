@@ -113,8 +113,10 @@ volatile unsigned long g_state_valid = 0;
 pthread_mutex_t mutex;
 /* pthread variables */
 pthread_t pth_read, pth_write, pth_detect,pth_comm;
+pthread_t pth_Atti;
 /* file descriptor */
 int fd_detect,fd_read = 0;
+int fd_Atti = 0;
 #ifdef USE_SYSTEM_WR
     int fd_write;
 #else
@@ -139,7 +141,7 @@ static void setSysTime(unsigned char *buf);
 static void writeDataToSpi(unsigned int val);
 static void getDeepthFromUart(void);
 static void getAttitudeFromUart(void);
-static void getBroadcastAttitudeFromUart(void);
+static void *getBroadcastAttitudeFromUart(void*);
 
 /****************************************************************************/
 /*****************************function definition****************************/
@@ -566,7 +568,7 @@ static void writeSampleRateToSpi(unsigned char val)
 static void writeRecordCtrlToSpi(unsigned char val)
 {
     writeDataToSpi(0x80000000 + val);
-    TRACE("g_recording_flag change to %2X\n", val);
+    /* TRACE("g_recording_flag change to %2X\n", val); */
 }
 /*
  * @name    writeTimeToSpi
@@ -696,30 +698,29 @@ static int searchOneFrame(unsigned char *buf,
 /*
  * @brief   get Attitude info from UART_2, device send message periodicly, 
  *          the program read double size of frame size, and find entire
- *          frame, get Attitude info.
+ *          frame, get Attitude info. the function run in a pthread.
  */
-static void getBroadcastAttitudeFromUart(void)
+static void *getBroadcastAttitudeFromUart(void* ptr)
 {
-    int fd;
     struct termios option;
     struct serial_struct serial;
     unsigned char frameHeader[ATTI_FRAME_HEADER_LEN] = {0xFF, 0x7E, 0x0C, 0x8A};
     unsigned char responseBuf[ATTI_BUF_SIZE] = {0};
     unsigned char frameBuf[ATTI_FRAME_SIZE] = {0};
     char sysCmd[64] = {0};
-    unsigned char l_read_cnt,l_cnt;
+    int l_read_cnt,l_cnt;
     int l_start_cnt;
 
-    fd = open(UART_2_FILE, O_RDWR|O_NOCTTY);
-    if (fd <= 0) {
+    fd_Atti = open(UART_2_FILE, O_RDWR|O_NOCTTY);
+    if (fd_Atti <= 0) {
         TRACE("%s open failed!\n", UART_2_FILE);
     } else {
         //TRACE("%s open succeed!\n", UART_2_FILE);
     }
 #if 1
     /* serial configuration */
-    ioctl(fd, TIOCGSERIAL, &serial);
-    tcgetattr(fd, &option);
+    ioctl(fd_Atti, TIOCGSERIAL, &serial);
+    tcgetattr(fd_Atti, &option);
     /* set baud rate */
     if(cfsetispeed(&option, B0)<0){
         TRACE("%s: set ispeed failed!\n", UART_2_FILE);
@@ -733,56 +734,50 @@ static void getBroadcastAttitudeFromUart(void)
     option.c_iflag &= ~BRKINT;
     option.c_oflag = 0;
     option.c_lflag = 0;
-    option.c_cc[VTIME] = 0;
+    option.c_cc[VTIME] = 10;
     option.c_cc[VMIN] = ATTI_FRAME_SIZE*2+3;
-    tcsetattr(fd, TCSANOW, &option);
+    tcsetattr(fd_Atti, TCSANOW, &option);
 #endif
     strcpy(sysCmd, "stty -F ");
     strcat(sysCmd, UART_2_FILE);
     strcat(sysCmd, " 38400\n");
     system(sysCmd);
     /* read response from device */
-    memset(responseBuf, 0, sizeof(responseBuf));
-    l_read_cnt = read(fd, responseBuf, ATTI_BUF_SIZE);
-    l_start_cnt = searchOneFrame(responseBuf, l_read_cnt, frameHeader);
-    if(l_start_cnt >= 0){
-        memcpy(frameBuf, &responseBuf[l_start_cnt], ATTI_FRAME_SIZE);
-        /* print recieved frame info */
-        TRACE("Attitude frame, %d : ", l_start_cnt);
-        for(l_cnt=0; l_cnt<ATTI_FRAME_SIZE; l_cnt++){
-            TRACE("%02X ", frameBuf[l_cnt]);
+    while (1) {
+        memset(responseBuf, 0, sizeof(responseBuf));
+        l_read_cnt = read(fd_Atti, responseBuf, ATTI_BUF_SIZE);
+        l_start_cnt = searchOneFrame(responseBuf, l_read_cnt, frameHeader);
+        if(l_start_cnt >= 0){
+            memcpy(frameBuf, &responseBuf[l_start_cnt], ATTI_FRAME_SIZE);
+            /* print recieved frame info */
+            TRACE("Attitude frame, %d : ", l_start_cnt);
+            for(l_cnt=0; l_cnt<ATTI_FRAME_SIZE; l_cnt++){
+                TRACE("%02X ", frameBuf[l_cnt]);
+            }
+            TRACE("\n");
+            fpga_reg.angle_x = (unsigned short)(frameBuf[ATTI_FRAME_AH]<<8)
+                                +frameBuf[ATTI_FRAME_AL];
+            if((frameBuf[ATTI_FRAME_PH]&0x80)==0x80){ 
+                /* value is negative while MSB equals to 1 */
+                fpga_reg.angle_y = (short)(-1*((unsigned short)
+                    ((frameBuf[ATTI_FRAME_PH]&0x7f)<<8)+frameBuf[ATTI_FRAME_PL]));
+            } else {
+                fpga_reg.angle_y = (unsigned short)((frameBuf[ATTI_FRAME_PH]&0x7f)<<8)+
+                                    frameBuf[ATTI_FRAME_PL];
+            }
+            if((frameBuf[ATTI_FRAME_RH]&0x80)==0x80){
+                fpga_reg.angle_z = (short)(-1*((unsigned short)
+                    ((frameBuf[ATTI_FRAME_RH]&0x7f)<<8)+frameBuf[ATTI_FRAME_RL]));
+            } else {
+                fpga_reg.angle_z = (unsigned short)((frameBuf[ATTI_FRAME_RH]&0x7f)<<8)+
+                                    frameBuf[ATTI_FRAME_RL];
+            }
+            /* adjust attitude value by multiply parameter */
+            fpga_reg.angle_x = (short)(fpga_reg.angle_x * ATTI_VALUE_MULTIPLY);
+            fpga_reg.angle_y = (short)(fpga_reg.angle_y * ATTI_VALUE_MULTIPLY);
+            fpga_reg.angle_z = (short)(fpga_reg.angle_z * ATTI_VALUE_MULTIPLY);
         }
-        TRACE("\n");
-        fpga_reg.angle_x = (unsigned short)(frameBuf[ATTI_FRAME_AH]<<8)
-                            +frameBuf[ATTI_FRAME_AL];
-        if((frameBuf[ATTI_FRAME_PH]&0x80)==0x80){ 
-            /* value is negative while MSB equals to 1 */
-            fpga_reg.angle_y = (short)(-1*((unsigned short)
-                ((frameBuf[ATTI_FRAME_PH]&0x7f)<<8)+frameBuf[ATTI_FRAME_PL]));
-        } else {
-            fpga_reg.angle_y = (unsigned short)((frameBuf[ATTI_FRAME_PH]&0x7f)<<8)+
-                                frameBuf[ATTI_FRAME_PL];
-        }
-        if((frameBuf[ATTI_FRAME_RH]&0x80)==0x80){
-            fpga_reg.angle_z = (short)(-1*((unsigned short)
-                ((frameBuf[ATTI_FRAME_RH]&0x7f)<<8)+frameBuf[ATTI_FRAME_RL]));
-        } else {
-            fpga_reg.angle_z = (unsigned short)((frameBuf[ATTI_FRAME_RH]&0x7f)<<8)+
-                                frameBuf[ATTI_FRAME_RL];
-        }
-        /* adjust attitude value by multiply parameter */
-        fpga_reg.angle_x = (short)(fpga_reg.angle_x * ATTI_VALUE_MULTIPLY);
-        fpga_reg.angle_y = (short)(fpga_reg.angle_y * ATTI_VALUE_MULTIPLY);
-        fpga_reg.angle_z = (short)(fpga_reg.angle_z * ATTI_VALUE_MULTIPLY);
-    } 
-#if 0
-    else {
-        for (l_cnt=0; l_cnt<l_read_cnt; l_cnt++) {
-            TRACE("%02X ", responseBuf[l_cnt]);
-        }
-        TRACE("\n");
     }
-#endif
 }
 
 /*
@@ -840,7 +835,7 @@ static __sighandler_t periodic_func(void)
         l_cycle_cnt = 0;
         getDeepthFromUart();
     }
-    getBroadcastAttitudeFromUart();
+    /* getBroadcastAttitudeFromUart(); */
     /* get system time */
     gettimeofday(&tv, NULL);
     /* time(&time_cur); */
@@ -859,9 +854,8 @@ static __sighandler_t periodic_func(void)
  */
 void all_pthread_start(void)
 {
-    /* create uart communication pthread */
     pthread_create(&pth_comm, NULL, uart_comm, NULL);
-    /* join pthread to process and wait for terminate */
+    pthread_create(&pth_Atti, NULL, getBroadcastAttitudeFromUart, NULL);
     TRACE("pth_common start work!\n");
     TRACE("g_recording_flag_prev is: %02X\n", g_recording_flag_prev);
     while (1) {
