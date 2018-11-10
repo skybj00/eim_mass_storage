@@ -55,7 +55,7 @@
 #define DEVICE_FILE_NAME    "/dev/eim_cs"
 #define DATA_READY_FILE     "/dev/data_ready"
 #define UART_CONFIG_FILE    "/dev/ttymxc4"
-#define UART_1_FILE         "/dev/ttyUSB2"
+#define UART_1_FILE         "/dev/ttyUSB1"
 #define UART_2_FILE         "/dev/ttyUSB0"
 #define GPIO_SPI_FILE       "/dev/gpio_spi"
 
@@ -634,85 +634,11 @@ static void writeAttitudeToSpi(struct UpdateInfo *reg)
 }
 /*
  * @name    getDeepthFromUart
- * @brief   get deepth information from UART_2 device 
+ * @brief   get deepth information from UART_1 device 
  */
 static void getDeepthFromUart(void)
 {
 
-}
-/*
- * @name    getAttitudeFromUart
- * @brief   get Attitude information from UART_1 device,
- *          device mode change to response mode.
- */
-static void getAttitudeFromUart(void)
-{
-    int fd;
-    struct termios option;
-    struct serial_struct serial;
-    const unsigned char cmdAcq = 0xB5;
-    const unsigned char frameSize = 7;
-    const unsigned char frameHeader = 0xff;
-    unsigned char responseBuf[10] = {0};
-    unsigned char l_read_cnt,l_cnt;
-
-    fd = open(UART_1_FILE, O_RDWR|O_NOCTTY);
-    if (fd <= 0) {
-        TRACE("%s open failed!\n", UART_1_FILE);
-    } else {
-        //TRACE("%s open succeed!\n", UART_CONFIG_FILE);
-    }
-#if 1
-    /* serial configuration */
-    ioctl(fd, TIOCGSERIAL, &serial);
-    tcgetattr(fd, &option);
-    /* set baud rate */
-    if(cfsetispeed(&option, B9600)<0){
-        TRACE("%s: set ispeed failed!\n", UART_1_FILE);
-    }
-    if(cfsetospeed(&option, B9600)<0){
-        TRACE("%s: set ospeed failed!\n", UART_1_FILE);
-    }
-    /* serial attributes set */
-    option.c_cflag = CS8|CREAD|CLOCAL;
-    option.c_iflag = 0;
-    option.c_iflag &= ~BRKINT;
-    option.c_iflag |= IGNBRK;
-    option.c_oflag = 0;
-    option.c_lflag = 0;
-    option.c_cc[VTIME] = 1;
-    option.c_cc[VMIN] = 60;
-    tcsetattr(fd, TCSANOW, &option);
-#endif
-    /* send command to device */
-    write(fd, &cmdAcq, 1);
-    /* read response from device */
-    memset(responseBuf, 0, sizeof(responseBuf));
-    l_read_cnt = read(fd, responseBuf, frameSize);
-    if(l_read_cnt==frameSize&&responseBuf[0]==frameHeader){
-        /* print recieved frame info */
-        TRACE("Attitude frame: \n");
-        for(l_cnt=0; l_cnt<l_read_cnt; l_cnt++){
-            TRACE("%02X ", responseBuf[l_cnt]);
-        }
-        TRACE("\n");
-        fpga_reg.angle_x = (unsigned short)(responseBuf[1]<<8)+responseBuf[2];
-        if((responseBuf[3]&0x80)==0x80){ 
-            /* value is negative while MSB equals to 1 */
-            fpga_reg.angle_y = -1*((unsigned short)((responseBuf[3]&0x7f)<<8)+
-                                responseBuf[4]);
-        } else {
-            fpga_reg.angle_y = (unsigned short)((responseBuf[3]&0x7f)<<8)+
-                                responseBuf[4];
-        }
-        if((responseBuf[5]&0x80)==0x80){
-            fpga_reg.angle_z = -1*((unsigned short)((responseBuf[5]&0x7f)<<8)+
-                                responseBuf[6]);
-        } else {
-            fpga_reg.angle_z = (unsigned short)((responseBuf[5]&0x7f)<<8)+
-                                responseBuf[6];
-        }
-    }
 }
 /*
  * @brief   find frame header which is specified in unsigned char *header.
@@ -768,7 +694,7 @@ static int searchOneFrame(unsigned char *buf,
     }
 }
 /*
- * @brief   get Attitude info from UART, device send message periodicly, 
+ * @brief   get Attitude info from UART_2, device send message periodicly, 
  *          the program read double size of frame size, and find entire
  *          frame, get Attitude info.
  */
@@ -780,14 +706,15 @@ static void getBroadcastAttitudeFromUart(void)
     unsigned char frameHeader[ATTI_FRAME_HEADER_LEN] = {0xFF, 0x7E, 0x0C, 0x8A};
     unsigned char responseBuf[ATTI_BUF_SIZE] = {0};
     unsigned char frameBuf[ATTI_FRAME_SIZE] = {0};
+    char sysCmd[64] = {0};
     unsigned char l_read_cnt,l_cnt;
     int l_start_cnt;
 
-    fd = open(UART_1_FILE, O_RDWR|O_NOCTTY);
+    fd = open(UART_2_FILE, O_RDWR|O_NOCTTY);
     if (fd <= 0) {
-        TRACE("%s open failed!\n", UART_1_FILE);
+        TRACE("%s open failed!\n", UART_2_FILE);
     } else {
-        //TRACE("%s open succeed!\n", UART_1_FILE);
+        //TRACE("%s open succeed!\n", UART_2_FILE);
     }
 #if 1
     /* serial configuration */
@@ -795,10 +722,10 @@ static void getBroadcastAttitudeFromUart(void)
     tcgetattr(fd, &option);
     /* set baud rate */
     if(cfsetispeed(&option, B0)<0){
-        TRACE("%s: set ispeed failed!\n", UART_1_FILE);
+        TRACE("%s: set ispeed failed!\n", UART_2_FILE);
     }
     if(cfsetospeed(&option, B38400)<0){
-        TRACE("%s: set ospeed failed!\n", UART_1_FILE);
+        TRACE("%s: set ospeed failed!\n", UART_2_FILE);
     }
     /* serial attributes set */
     option.c_cflag = CS8|CREAD|CLOCAL;
@@ -810,7 +737,10 @@ static void getBroadcastAttitudeFromUart(void)
     option.c_cc[VMIN] = ATTI_FRAME_SIZE*2+3;
     tcsetattr(fd, TCSANOW, &option);
 #endif
-    system("stty -F /dev/ttyUSB2 38400 \n");
+    strcpy(sysCmd, "stty -F ");
+    strcat(sysCmd, UART_2_FILE);
+    strcat(sysCmd, " 38400\n");
+    system(sysCmd);
     /* read response from device */
     memset(responseBuf, 0, sizeof(responseBuf));
     l_read_cnt = read(fd, responseBuf, ATTI_BUF_SIZE);
