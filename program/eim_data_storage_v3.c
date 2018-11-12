@@ -42,7 +42,7 @@
 #define TRACE(fmt, args...)
 #endif
 
-#define READ_BUF_SIZE       (64*1024)
+#define READ_BUF_SIZE       (128*1024)
 #define BLOCK_NUM           (2048)
 #define MAIN_FILE_NAME      "DATA_"
 #define STORAGE_PATH        "/mnt/ssd/"
@@ -882,8 +882,7 @@ void all_pthread_start(void)
             pthread_cancel(pth_detect);
             pthread_cancel(pth_read);
             pthread_cancel(pth_write);
-            /* read data once to clear FIFO in the device */
-            usleep(999999);
+            sleep(2);
             read(fd_read, buf.dataBuf, READ_BUF_SIZE<<2);
             /* close signal_detect,data_read,data_write file */
             close(fd_detect);
