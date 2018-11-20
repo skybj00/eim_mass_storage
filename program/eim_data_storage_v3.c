@@ -431,7 +431,7 @@ static void genNewFileName(char *name)
     DIR *dir;
     struct dirent *dirent;
     char char_index[4] ={0};
-    unsigned char current_index = 0;
+    unsigned int current_index = 0;
     char *index_start;
     char *index_stop;
 #ifdef USE_FILE_DATE
@@ -460,12 +460,15 @@ static void genNewFileName(char *name)
             index_start = dirent->d_name + strlen(MAIN_FILE_NAME);
             /* index_stop = strchr(dirent->d_name, '.'); */
             memcpy(char_index, index_start, FILE_INDEX_LEN);
-            char_index[FILE_INDEX_LEN + 1] = '\0';
+            char_index[FILE_INDEX_LEN] = '\0';
             if (atoi(char_index) > current_index) {
                 current_index = atoi(char_index);
             }
             //TRACE("current file index: %d\n", current_index);
         }
+    }
+    if (current_index == 999) {
+        current_index = 0;
     }
     closedir(dir);
 
