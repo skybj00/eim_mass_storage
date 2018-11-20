@@ -15,3 +15,4 @@ uninstall:
 	rmmod $(OBJS)
 clean:
 	rm -rf *.o *.o.cmd *.ko *.mod.c *.order *.symvers
+	rm -rf .tmp_versions .ccm*
