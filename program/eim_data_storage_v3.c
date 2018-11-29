@@ -257,7 +257,7 @@ void *data_write(void *arg)
 #ifdef USER_FILE_FLUSH
         if (flush_cnt++ >= FFLUSH_COUNT) {
             flush_cnt = 0;
-            syncfs(fd_write);
+            fsync(fd_write);
         }
 #endif
 #else
