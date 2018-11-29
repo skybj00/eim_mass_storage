@@ -32,8 +32,12 @@
 
 /*****************************************************************************/
 /*************************** Macros ******************************************/
-#define USE_SYSTEM_WR
-//#define USER_FILE_FLUSH
+/* uncomment this while using system call like read/write/open/close, comment this
+ * while using C standard library like fread/fwrite/fopen/fclose
+ */
+#define USE_SYSTEM_WR       
+/* uncomment USER_FILE_FLUSH when using user flush operation */
+#define USER_FILE_FLUSH    
 #define USE_FILE_DATE
 #define DEBUG_ENABLE	1
 #if DEBUG_ENABLE
@@ -42,14 +46,18 @@
 #define TRACE(fmt, args...)
 #endif
 
+/* data block size is defined by READ_BUF_SIZE, block num is defined by
+ * BLOCK_NUM, the read buffer size equals to block size multiply block num. */
 #define READ_BUF_SIZE       (128*1024)
 #define BLOCK_NUM           (2048)
 #define MAIN_FILE_NAME      "DATA_"
 #define STORAGE_PATH        "/mnt/ssd/"
 #define FILE_INDEX_LEN      (3)
 #define FILE_DATE_LEN       (12)
-#define SECTOR_COUNT        (8192)
-#define FFLUSH_COUNT        (20)
+/* flush data to SSD while sector_cnt reach FFLUSH_COUNT, the sector_cnt
+ * is the count of blocks which the size of block is specified by 
+ * READ_BUF_SIZE */ 
+#define FFLUSH_COUNT        (128)   
 #define FILE_HEADER_LEN     (12)
 #define CST_DIFF_IN_SEC     (8*3600)
 #define DEVICE_FILE_NAME    "/dev/eim_cs"
@@ -791,6 +799,8 @@ static void setSysTime(unsigned char *buf)
 {
     time_t time_cur,time_set;
     struct tm tm_set;
+    char time_epoch[12] = {0};
+    char wrRtcCmd[64] = {0};
 
     time(&time_cur);
     TRACE("current time : %d\n", time_cur);
@@ -798,6 +808,11 @@ static void setSysTime(unsigned char *buf)
     time_set = mktime(&tm_set);
     stime(&time_set);
     TRACE("set system time to : %d\n", time_set);
+    sprintf(time_epoch, "%d", time_set);
+    strcpy(wrRtcCmd, "hwclock -w --epoch ");
+    strcat(wrRtcCmd, time_epoch);
+    strcat(wrRtcCmd, "\n");
+    system(wrRtcCmd);
 }
 /*
  * @name    periodic_func
