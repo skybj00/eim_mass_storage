@@ -33,11 +33,11 @@
 /*****************************************************************************/
 /*************************** Macros ******************************************/
 /* uncomment this while using system call like read/write/open/close, comment this
- * while using C standard library like fread/fwrite/fopen/fclose
- */
+ * while using C standard library like fread/fwrite/fopen/fclose. */
 #define USE_SYSTEM_WR       
 /* uncomment USER_FILE_FLUSH when using user flush operation */
 #define USER_FILE_FLUSH    
+/* uncomment USE_FILE_DATE when add date to file name */
 #define USE_FILE_DATE
 #define DEBUG_ENABLE	1
 #if DEBUG_ENABLE
@@ -58,7 +58,13 @@
  * is the count of blocks which the size of block is specified by 
  * READ_BUF_SIZE */ 
 #define FFLUSH_COUNT        (128)   
+/* define the file header length, file header locate at the head of file
+ * which defines the time of file start and sample rate. */
 #define FILE_HEADER_LEN     (12)
+/* define _FILE_OFFSET_BITS to change the file offset variable width to 64, which
+ * is 32 in default. If the macro is not defined, program can NOT write big file 
+ * that is larger than 2GB to SSD. */
+#define _FILE_OFFSET_BITS   64
 #define CST_DIFF_IN_SEC     (8*3600)
 #define DEVICE_FILE_NAME    "/dev/eim_cs"
 #define DATA_READY_FILE     "/dev/data_ready"
