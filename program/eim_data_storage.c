@@ -10,6 +10,12 @@
  * @brief EIM data read and storage test program
  */
 
+/* define _FILE_OFFSET_BITS to change the file offset variable width to 64, which
+ * is 32 in default. If the macro is not defined, program can NOT write big file 
+ * that is larger than 2GB to SSD. The Macros must define in front of #include 
+ * operations */
+#define _FILE_OFFSET_BITS   64
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -61,10 +67,6 @@
 /* define the file header length, file header locate at the head of file
  * which defines the time of file start and sample rate. */
 #define FILE_HEADER_LEN     (12)
-/* define _FILE_OFFSET_BITS to change the file offset variable width to 64, which
- * is 32 in default. If the macro is not defined, program can NOT write big file 
- * that is larger than 2GB to SSD. */
-#define _FILE_OFFSET_BITS   64
 #define CST_DIFF_IN_SEC     (8*3600)
 #define DEVICE_FILE_NAME    "/dev/eim_cs"
 #define DATA_READY_FILE     "/dev/data_ready"
