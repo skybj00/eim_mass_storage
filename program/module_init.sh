@@ -15,7 +15,7 @@ MODULE_EIM_RW=eim_rw_20180901.ko
 MODULE_IOMUXC=iomuxc_cfg_20180901.ko
 MODULE_DETECT=data_ready_20180930.ko
 MODULE_SPI=gpio_spi_20180930.ko
-MAIN_PROGRAM=${BINARY_DIR}./eim_data_storage_v3
+MAIN_PROGRAM=${BINARY_DIR}./eim_data_storage
 
 function PidFind()
 {
@@ -44,15 +44,15 @@ else
     MODULE_CNT=$(lsmod|wc -l)
     if [ $MODULE_CNT -lt 2 ]; then
         insmod ${MODULE_DIR}${MODULE_CCM}
-        insmod ${MODULE_DIR}$MODULE_EIM_CFG
-        insmod ${MODULE_DIR}$MODULE_EIM_RW
-        insmod ${MODULE_DIR}$MODULE_IOMUXC
-        insmod ${MODULE_DIR}$MODULE_DETECT
-        insmod ${MODULE_DIR}$MODULE_SPI
+        insmod ${MODULE_DIR}${MODULE_EIM_CFG}
+        insmod ${MODULE_DIR}${MODULE_EIM_RW}
+        insmod ${MODULE_DIR}${MODULE_IOMUXC}
+        insmod ${MODULE_DIR}${MODULE_DETECT}
+        insmod ${MODULE_DIR}${MODULE_SPI}
         sleep 10
         ${BINARY_DIR}./regs_init
-        # mount SSD to /mnt/ssd
-        mount /dev/sda1 /mnt/ssd
+        sleep 2
+        /usr/local/sbin/mount.exfat /dev/sda1 /mnt/ssd
     fi
     # if SSD mount failed! exit the program
     MOUNT_CHECK=$(df -h|grep "ssd"|wc -l)
