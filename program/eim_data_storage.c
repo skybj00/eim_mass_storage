@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>   /* used for time get and time set */
 #include <sys/ioctl.h>
+#include <sys/statfs.h>     /* used for disk free space check */
 #include <signal.h>
 #include <errno.h>
 /* header for serial */
@@ -45,6 +46,10 @@
 #define USER_FILE_FLUSH    
 /* uncomment USE_FILE_DATE when add date to file name */
 #define USE_FILE_DATE
+
+/*++++++++++++++++CONDITIONAL COMPILE++++++++++++++++++++++*/
+//#define SPI_DEBUG
+//#define ATTI_DEBUG
 #define DEBUG_ENABLE	1
 #if DEBUG_ENABLE
 #define TRACE(fmt, args...) printf(fmt,##args)
@@ -100,6 +105,7 @@
 #define ATTI_BOUND_Z_LOW    ((short)((-90.0/360)*6400*ATTI_VALUE_MULTIPLY))
 
 #define PERIODIC_FUNC_PERIOD_USEC   (200000)    /* set period to 200 ms */
+#define MIN_DISK_FREE_SPACE_GB      (20)
 /*****************************************************************************/
 /*****************************Global Variable*********************************/
 struct databuf{
@@ -158,6 +164,8 @@ static void writeDataToSpi(unsigned int val);
 static void getDeepthFromUart(void);
 static void getAttitudeFromUart(void);
 static void *getBroadcastAttitudeFromUart(void*);
+static int getDiskFreeSpaceInGb(char *path);
+static void sendUartResponse(int fd, char head, char cmd, char stat);
 
 /****************************************************************************/
 /*****************************function definition****************************/
@@ -314,6 +322,7 @@ void *uart_comm(void *arg)
     const int frame_cmd_offset = 1;
     struct termios option;
     struct serial_struct serial;
+    int tmp;
 
     fd = open(UART_CONFIG_FILE, O_RDWR|O_NOCTTY);
     if (fd <= 0) {
@@ -344,15 +353,10 @@ void *uart_comm(void *arg)
     tcsetattr(fd, TCSANOW, &option);
 #endif
     /* send system start message to host*/
-    sendbuf[0] = 0xFF;
-    sendbuf[1] = 0x00;
-    sendbuf[2] = 0x5a;
-    write(fd, sendbuf, 3);
+    sendUartResponse(fd, 0xff, 0x00, 0x5a);
 
     while(1){
-        /* clear recieve buffer */
         memset(recvbuf, 0, 16);
-        /* read communication frame */
         rd_cnt = read(fd, recvbuf, uart_comm_frame_size);
         /* check the frame via add-up checking */
         sum = 0;
@@ -368,32 +372,27 @@ void *uart_comm(void *arg)
                 for(i=0; i<rd_cnt; i++){
                     TRACE("%02X ", recvbuf[i]);
                 }
-                printf("\n");
+                TRACE("\n");
                 continue;
             }
         }
         /* ananlyze the comm frame and take actions */
         if(recvbuf[frame_cmd_offset]==0x81){
-            /* setting system time*/
             setSysTime(&recvbuf[frame_cmd_offset+1]);
-            /* pass sample rate to device via SPI*/
             writeSampleRateToSpi(recvbuf[frame_check_offset-1]);
-            /* update sample rate variable */
             g_sample_rate_in_hz = (unsigned int)(recvbuf[frame_check_offset-1]*1000);
-            /* send feedback info */
-            sendbuf[0] = 0xFF;
-            sendbuf[1] = 0x01;
-            sendbuf[2] = 0x00;
-            write(fd, sendbuf, 3);            
+            sendUartResponse(fd, 0xff, 0x01, 0x00);
         }else if(recvbuf[frame_cmd_offset]==0x82){
-            /* change recording status */
+            tmp = getDiskFreeSpaceInGb(STORAGE_PATH);
+            if ((tmp < 0)||(tmp < MIN_DISK_FREE_SPACE_GB)) {
+                sendUartResponse(fd, 0xff, 0x02, (g_recording_flag==0x01));
+                continue;
+            }
+            /* change recording status, 0 for recording and 1 for stop */
             g_recording_flag = (recvbuf[frame_cmd_offset+1]==0x00);
             writeRecordCtrlToSpi(g_recording_flag);
             /* send feedback info */
-            sendbuf[0] = 0xFF;
-            sendbuf[1] = 0x02;
-            sendbuf[2] = (g_recording_flag==0x00);
-            write(fd, sendbuf, 3);
+            sendUartResponse(fd, 0xff, 0x02, (g_recording_flag==0x00));
         }
 
         if(g_program_exit_flag){
@@ -578,7 +577,7 @@ static void writeDataToSpi(unsigned int val)
 static void writeSampleRateToSpi(unsigned char val)
 {
     writeDataToSpi(0x81000000 + val);
-    TRACE("sample rate change to %d KHz\n", val);
+    /* TRACE("sample rate change to %d KHz\n", val); */
 }
 /*
  * @name    writeRecordCtrlToSpi
@@ -648,10 +647,12 @@ static void writeAttitudeToSpi(struct UpdateInfo *reg)
     if (reg->angle_z>=ATTI_BOUND_Z_LOW&&reg->angle_z<=ATTI_BOUND_Z_HIGH) {
         writeDataToSpi(0x88000000 | (reg->angle_z & 0x0000ffff));
     }
+#ifdef SPI_DEBUG
     TRACE("SPI VALUE: 0x%08X, 0x%08X, 0x%08X\n", 
             0x86000000|(reg->angle_x & 0x0000ffff),
             0x87000000|(reg->angle_y & 0x0000ffff),
             0x88000000|(reg->angle_z & 0x0000ffff));
+#endif
 }
 /*
  * @name    getDeepthFromUart
@@ -695,19 +696,25 @@ static int searchOneFrame(unsigned char *buf,
         return -1;
     frameStart = findHeader(buf, len, header);
     if (frameStart < 0) {
-        TRACE("first header is not found\n");
+#ifdef ATTI_DEBUG
+        TRACE("first header is not found\n"); 
+#endif
         return -1;
     } else {
         if (frameStart > (len - ATTI_FRAME_SIZE - ATTI_FRAME_HEADER_LEN)){
-            TRACE("no entire frame, len: %d, start: %d\n", len, frameStart);
+#ifdef ATTI_DEBUG
+            TRACE("no entire frame, len: %d, start: %d\n", len, frameStart); 
+#endif
             return -1;
         }
         frameStart2 = findHeader(&buf[frameStart+ATTI_FRAME_SIZE], 
                                 len-frameStart-ATTI_FRAME_SIZE,
                                 header);
         if (frameStart2 < 0) {
+#ifdef ATTI_DEBUG
             TRACE("second header not found! len: %d, 1st start: %d\n",
-                    len, frameStart);
+                    len, frameStart); 
+#endif
             return -1;
         } else {
             return frameStart;
@@ -875,8 +882,37 @@ static __sighandler_t periodic_func(void)
     writeAttitudeToSpi(&fpga_reg);
 }
 /*
- * @name all_pthread_start()
- * @brief  create all work pthread, and then start pthread.
+ * @name    getDiskFreeSpaceInGb
+ * @brief   check the disk free space and return value in the unit of Gib,
+ *          return -1 while error occurred.
+ */
+static int getDiskFreeSpaceInGb(char *path)
+{
+    struct statfs stat;
+
+    if (strlen(path) > 64) return -1;
+    if (statfs(path, &stat) != 0) {
+        TRACE("disk free space check failed!\n");
+        return -1;
+    }
+    return (int)((stat.f_bsize>>10)*(stat.f_bavail>>20));
+}
+/*
+ * @name    sendUartResponse
+ * @brief   send uart response to host, response frame consist of 3 byte,
+ *          head, cmd, and stat.
+ */
+static void sendUartResponse(int fd, char head, char cmd, char stat)
+{
+    char buf[4] = {0};
+    buf[0] = head;
+    buf[1] = cmd;
+    buf[2] = stat;
+    write(fd, buf, 3);
+}
+/*
+ * @name    all_pthread_start()
+ * @brief   create all work pthread, and then start pthread.
  */
 void all_pthread_start(void)
 {
