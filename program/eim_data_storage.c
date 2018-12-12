@@ -25,6 +25,8 @@
 #include <sys/time.h>   /* used for time get and time set */
 #include <sys/ioctl.h>
 #include <sys/statfs.h>     /* used for disk free space check */
+#include <sys/wait.h>
+#include <sys/signal.h>
 #include <signal.h>
 #include <errno.h>
 /* header for serial */
@@ -104,6 +106,12 @@
 #define ATTI_BOUND_Z_HIGH   ((short)((90.0/360)*6400*ATTI_VALUE_MULTIPLY))
 #define ATTI_BOUND_Z_LOW    ((short)((-90.0/360)*6400*ATTI_VALUE_MULTIPLY))
 
+/*++++++++++++++++UART DATA FRAME DEFINE++++++++++*/
+#define UART_CMD_CONFIG     (0x81)
+#define UART_CMD_RECORD     (0x82)
+#define UART_CMD_RECORD_START   (0x00)
+#define UART_CMD_RECORD_STOP    (0x01)
+
 #define PERIODIC_FUNC_PERIOD_USEC   (200000)    /* set period to 200 ms */
 #define MIN_DISK_FREE_SPACE_GB      (20)
 /*****************************************************************************/
@@ -122,6 +130,7 @@ struct UpdateInfo {
     short angle_y;
     short angle_z;
 }fpga_reg;
+typedef void(*sighandler_t)(int);
 //unsigned char readBuf[READ_BUF_SIZE] = {0};
 sem_t sem_notify;
 sem_t sem_complete;
@@ -131,14 +140,19 @@ char storage_file_name[64] = {0};
 volatile unsigned long g_state_cnt = 0;
 volatile unsigned long g_state_valid = 0;
 
+const char shell_mount[64] = "/bin/mount.exfat-fuse /dev/sda1 /mnt/ssd";
+const char shell_umount[32] ="/bin/umount /mnt/ssd";
+
 /* use mutex to pretect databuf struct */
 pthread_mutex_t mutex;
 /* pthread variables */
 pthread_t pth_read, pth_write, pth_detect,pth_comm;
 pthread_t pth_Atti;
+pthread_t pth_mount,pth_umount;
 /* file descriptor */
 int fd_detect,fd_read = 0;
 int fd_Atti = 0;
+int fd_cfg = 0;
 #ifdef USE_SYSTEM_WR
     int fd_write;
 #else
@@ -149,6 +163,10 @@ unsigned char g_recording_flag = 0;
 unsigned char g_recording_flag_prev = 0;
 unsigned char g_program_exit_flag = 0;
 unsigned int g_sample_rate_in_hz = 8000;
+unsigned char g_disk_mount_flag = 0;
+unsigned char g_disk_umount_flag = 0;
+unsigned char g_disk_mounted_flag = 0;
+
 /****************************************************************************/
 /*****************************Private function Declartion********************/
 static __sighandler_t program_exit(void);
@@ -166,7 +184,11 @@ static void getAttitudeFromUart(void);
 static void *getBroadcastAttitudeFromUart(void*);
 static int getDiskFreeSpaceInGb(char *path);
 static void sendUartResponse(int fd, char head, char cmd, char stat);
-
+static int checkUartFrame(unsigned char *buf, int start, int len, int off_chk);
+static int umountDisk(void);
+static int mountDisk(void);
+static void checkSystemValid(void);
+static int pox_system(const char*cmd);
 /****************************************************************************/
 /*****************************function definition****************************/
 /*
@@ -312,7 +334,7 @@ void *data_write(void *arg)
  */
 void *uart_comm(void *arg)
 {
-    int fd;
+    //int fd;
     unsigned char recvbuf[16] = {0};
     unsigned char sendbuf[8] = {0};
     unsigned int time_second_cnt = 0;
@@ -322,18 +344,18 @@ void *uart_comm(void *arg)
     const int frame_cmd_offset = 1;
     struct termios option;
     struct serial_struct serial;
-    int tmp;
+    int tmp,ret;
 
-    fd = open(UART_CONFIG_FILE, O_RDWR|O_NOCTTY);
-    if (fd <= 0) {
+    fd_cfg = open(UART_CONFIG_FILE, O_RDWR|O_NOCTTY);
+    if (fd_cfg <= 0) {
         TRACE("%s open failed!\n", UART_CONFIG_FILE);
     } else {
         //TRACE("%s open succeed!\n", UART_CONFIG_FILE);
     }
 #if 1
     /* serial configuration */
-    ioctl(fd, TIOCGSERIAL, &serial);
-    tcgetattr(fd, &option);
+    ioctl(fd_cfg, TIOCGSERIAL, &serial);
+    tcgetattr(fd_cfg, &option);
     /* set baud rate */
     if(cfsetispeed(&option, B9600)<0){
         TRACE("set ispeed failed!\n");
@@ -350,58 +372,65 @@ void *uart_comm(void *arg)
     option.c_lflag = 0;
     option.c_cc[VTIME] = 1;
     option.c_cc[VMIN] = 10;
-    tcsetattr(fd, TCSANOW, &option);
+    tcsetattr(fd_cfg, TCSANOW, &option);
 #endif
     /* send system start message to host*/
-    sendUartResponse(fd, 0xff, 0x00, 0x5a);
-
+    sendUartResponse(fd_cfg, 0xff, 0x00, 0x5a);
     while(1){
         memset(recvbuf, 0, 16);
-        rd_cnt = read(fd, recvbuf, uart_comm_frame_size);
-        /* check the frame via add-up checking */
-        sum = 0;
-        for(i=frame_cmd_offset; i<uart_comm_frame_size-1; i++){
-            sum += recvbuf[i];
+        rd_cnt = read(fd_cfg, recvbuf, uart_comm_frame_size);
+        if (rd_cnt < uart_comm_frame_size) {
+            TRACE("uart frame is too short! cnt: %d\n", rd_cnt);
+            continue;
         }
-        if((sum+recvbuf[frame_check_offset]) != 0xFF){
-            if(rd_cnt>uart_comm_frame_size){
-                TRACE("uart frame length exceed!\n");
-                continue;
-            } else {
-                TRACE("uart sum check failed! cnt: %d, check: 0x%02X\n",rd_cnt, sum); 
-                for(i=0; i<rd_cnt; i++){
-                    TRACE("%02X ", recvbuf[i]);
-                }
-                TRACE("\n");
-                continue;
-            }
-        }
+        if (checkUartFrame(recvbuf, frame_cmd_offset, 
+                (int)rd_cnt, frame_check_offset) < 0) 
+            continue;
         /* ananlyze the comm frame and take actions */
-        if(recvbuf[frame_cmd_offset]==0x81){
+        if (recvbuf[frame_cmd_offset]==UART_CMD_CONFIG) {
             setSysTime(&recvbuf[frame_cmd_offset+1]);
             writeSampleRateToSpi(recvbuf[frame_check_offset-1]);
             g_sample_rate_in_hz = (unsigned int)(recvbuf[frame_check_offset-1]*1000);
-            sendUartResponse(fd, 0xff, 0x01, 0x00);
-        }else if(recvbuf[frame_cmd_offset]==0x82){
-            tmp = getDiskFreeSpaceInGb(STORAGE_PATH);
-            if ((tmp < 0)||(tmp < MIN_DISK_FREE_SPACE_GB)) {
-                sendUartResponse(fd, 0xff, 0x02, (g_recording_flag==0x01));
-                continue;
+            sendUartResponse(fd_cfg, 0xff, UART_CMD_CONFIG&0x7f, 0x00);
+        } else if (recvbuf[frame_cmd_offset]==UART_CMD_RECORD) {
+            if (recvbuf[frame_cmd_offset+1] == UART_CMD_RECORD_START) {
+                if (mountDisk() < 0) {
+                    TRACE("mount disk failed!\n");
+                }
+                sleep(2);
+                tmp = getDiskFreeSpaceInGb(STORAGE_PATH);
+                if ((tmp < 0)||(tmp < MIN_DISK_FREE_SPACE_GB)) {
+                    sendUartResponse(fd_cfg, 0xff, 
+                        UART_CMD_RECORD&0x7f, UART_CMD_RECORD_STOP);
+                    TRACE("disk free space is not enough!\n");
+                    continue;
+                }
+                g_recording_flag = (recvbuf[frame_cmd_offset+1]==UART_CMD_RECORD_START);
+                writeRecordCtrlToSpi(g_recording_flag);
+                sendUartResponse(fd_cfg, 0xff, UART_CMD_RECORD&0x7F, UART_CMD_RECORD_START);
+            } else {
+                /* change recording status g_recording_flag, 
+                 * 1 for recording and 0 for stop */
+                g_recording_flag = (recvbuf[frame_cmd_offset+1]==UART_CMD_RECORD_START);
+                writeRecordCtrlToSpi(g_recording_flag);
+                //sendUartResponse(fd_cfg, 0xff, UART_CMD_RECORD&0x7F, UART_CMD_RECORD_STOP);
             }
-            /* change recording status, 0 for recording and 1 for stop */
-            g_recording_flag = (recvbuf[frame_cmd_offset+1]==0x00);
-            writeRecordCtrlToSpi(g_recording_flag);
-            /* send feedback info */
-            sendUartResponse(fd, 0xff, 0x02, (g_recording_flag==0x00));
-        }
-
-        if(g_program_exit_flag){
-            TRACE("pthread: uart_comm exit!\n");
-            close(fd);
-            pthread_exit(0);
         }
     }
 }
+/*
+ * @brief   pthread for disk umount
+ */
+void *disk_umount(void *arg)
+{
+    while (1) {
+        if (g_disk_umount_flag) {
+            g_disk_mounted_flag = 0;
+            execl("/bin/sh", "sh", "-c", shell_mount, (char*)0);
+        }
+    }
+}
+
 /*****************************************************************************/
 /*****************************************************************************/
 /*
@@ -767,6 +796,7 @@ static void *getBroadcastAttitudeFromUart(void* ptr)
     strcpy(sysCmd, "stty -F ");
     strcat(sysCmd, UART_2_FILE);
     strcat(sysCmd, " 38400\n");
+    checkSystemValid();
     system(sysCmd);
     /* read response from device */
     while (1) {
@@ -911,11 +941,97 @@ static void sendUartResponse(int fd, char head, char cmd, char stat)
     write(fd, buf, 3);
 }
 /*
+ * @name    checkUartFrame
+ * @brief   check whether the uart frame is valid or not.
+ */
+static int checkUartFrame(unsigned char *buf, int start, int len, int off_chk)
+{
+    unsigned char sum,i;
+    
+    /* check the frame via add-up checking */
+    sum = 0;
+    for(i=start; i<off_chk; i++){
+        sum += buf[i];
+    }
+    if((sum+buf[off_chk]) != 0xFF){
+        TRACE("uart sum check failed! cnt: %d, check: 0x%02X\n", len, sum); 
+        for(i=0; i<len; i++){
+            TRACE("%02X ", buf[i]);
+        }
+        TRACE("\n");
+        return -1;
+    } else {
+        return 0;
+    }
+}
+/*
+ * @name    mountDisk
+ * @brief   mount /dev/sda1 to /mnt/ssd via shell command.
+ */
+static int mountDisk(void)
+{
+    return pox_system(shell_mount);    
+}
+/*
+ * @name umountDisk
+ */
+static int umountDisk(void)
+{
+    return pox_system(shell_umount);
+}
+/*
+ * @name    checkSystemValid
+ */
+static void checkSystemValid(void)
+{
+    int ret; 
+    ret = system(NULL);
+    if (ret) {
+        TRACE("system() is avaliable!\n");
+    } else {
+        TRACE("system() is invalid!\n");
+    }
+}
+/*
+ * @name    pox_system
+ * @brief   call shell command via system() function
+ */
+static int pox_system(const char *cmd)
+{
+    int ret = 0;
+#if 0
+    sighandler_t old_handler;
+    old_handler = signal(SIGCHILD, SIG_DFL);
+    ret = system(cmd);
+    signal(SIGCHLD, old_handler);
+#else
+    FILE *fp;
+    char buf[256];
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        TRACE("popen error: %s\n", strerror(errno));
+        return -1;
+    }
+    while (fgets(buf, sizeof(buf), fp)){
+        TRACE("%s", buf);
+    }
+    ret = pclose(fp);
+    if (ret < 0) {
+        TRACE("pclose failed!\n");
+    }
+    return ret;
+#endif
+}
+//********************************************************************
+//********************************************************************
+/*
  * @name    all_pthread_start()
  * @brief   create all work pthread, and then start pthread.
  */
 void all_pthread_start(void)
 {
+    int ret;
+
     pthread_create(&pth_comm, NULL, uart_comm, NULL);
     pthread_create(&pth_Atti, NULL, getBroadcastAttitudeFromUart, NULL);
     TRACE("pth_common start work!\n");
@@ -954,6 +1070,12 @@ void all_pthread_start(void)
             TRACE("########################################\n");
             g_recording_flag_prev = g_recording_flag;
             TRACE("g_recording_flag change to %d\n", g_recording_flag);
+            /* checkSystemValid(); */
+            if (umountDisk() < 0) {
+                TRACE("disk umount failed!\n");
+            }
+            g_disk_mounted_flag = 0;
+            sendUartResponse(fd_cfg, 0xff, UART_CMD_RECORD&0x7F, UART_CMD_RECORD_STOP);
         }
     }
 }
