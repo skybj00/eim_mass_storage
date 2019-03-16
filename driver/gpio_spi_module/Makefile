@@ -1,10 +1,6 @@
-CC=$(CROSS_COMPILE)gcc
-INCLUDE_DIR = /usr/local/bin/CodeSourcery/fsl-linux-toolchain/arm-fsl-linux-gnueabi/multi-libs/usr
-#EXTRA_CFLAGS = -Wall -I$(INCLUDE_DIR)
-EXTRA_CFLAGS =
-SRC_DIR = /usr/src/linux-3.0.35_recorder_710
-TARGET := gpio_spi_20180930
+include ../Make.inc
 
+TARGET := gpio_spi_20180930
 obj-m := $(TARGET).o
 $(TARGET)-objs = gpio_spi_module.o 
 default:
