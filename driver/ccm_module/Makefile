@@ -1,4 +1,4 @@
-include ../Make.inc
+-include ../Make.inc
 
 TARGET := ccm_20180901
 obj-m := $(TARGET).o

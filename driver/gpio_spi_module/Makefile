@@ -1,4 +1,4 @@
-include ../Make.inc
+-include ../Make.inc
 
 TARGET := gpio_spi_20180930
 obj-m := $(TARGET).o

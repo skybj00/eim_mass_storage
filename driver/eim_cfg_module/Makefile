@@ -1,4 +1,4 @@
-include ../Make.inc
+-include ../Make.inc
 
 TARGET := eim_cfg_20180901
 obj-m := $(TARGET).o

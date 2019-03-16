@@ -1,4 +1,4 @@
-include ../Make.inc
+-include ../Make.inc
 
 TARGET := eim_rw_20180927
 obj-m := $(TARGET).o
